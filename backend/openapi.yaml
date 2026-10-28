@@ -1,0 +1,495 @@
+openapi: 3.0.3
+info:
+  title: Kit & Cable Order Management API
+  version: 1.0.0
+  description: |
+    Serverless order management API (API Gateway HTTP API + Lambda).
+
+    * Protected routes need `Authorization: Bearer <access token>` (from `/auth/login`). API Gateway
+      answers **401** when the header is missing; the Lambda Authorizer rejects invalid/expired tokens
+      with **403** (no error envelope) before any Lambda runs. Refresh the token and retry.
+    * `/admin/*` routes additionally require `role = admin` in the token (**403** with an error envelope otherwise).
+    * Every response has an `X-Correlation-Id` header. Send your own `X-Correlation-Id` (8-128 chars)
+      to trace a request through the logs.
+    * Success envelope: `{"data": ..., "correlationId": "..."}`.
+      Error envelope: `{"error": {"code", "message", "details"?}, "correlationId": "..."}`.
+    * Money is in integer minor units (`priceMinor`, `totalMinor`; 129000 = 1,290.00 THB).
+    * Lists are paginated with `limit` and an opaque `nextToken`.
+servers:
+  - url: https://{apiId}.execute-api.{region}.amazonaws.com
+    variables:
+      apiId: { default: example }
+      region: { default: us-east-1 }
+  - url: http://127.0.0.1:8000
+    description: Local dev server (simulated AWS)
+tags:
+  - name: Auth
+  - name: Products
+  - name: Orders
+  - name: Admin
+
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100 }
+    NextToken:
+      name: nextToken
+      in: query
+      schema: { type: string, maxLength: 2048 }
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9_\-]{3,80}$' }
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9_\-]{3,80}$' }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  schemas:
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+            details: {}
+        correlationId: { type: string }
+    User:
+      type: object
+      properties:
+        userId: { type: string }
+        email: { type: string }
+        displayName: { type: string }
+        role: { type: string, enum: [customer, admin] }
+    Session:
+      type: object
+      properties:
+        tokens:
+          type: object
+          properties:
+            accessToken: { type: string }
+            refreshToken: { type: string }
+            expiresIn: { type: integer, example: 3600 }
+        user: { $ref: '#/components/schemas/User' }
+    Product:
+      type: object
+      properties:
+        productId: { type: string }
+        name: { type: string }
+        description: { type: string }
+        priceMinor: { type: integer }
+        currency: { type: string, example: THB }
+        category: { type: string }
+        imageUrl: { type: string, nullable: true }
+        available: { type: integer }
+        inStock: { type: boolean }
+    AdminProduct:
+      allOf:
+        - $ref: '#/components/schemas/Product'
+        - type: object
+          properties:
+            active: { type: boolean }
+            reserved: { type: integer }
+            sold: { type: integer }
+            testBehavior: { type: string, nullable: true, enum: [PAYMENT_DECLINE, PAYMENT_TRANSIENT_ONCE, null] }
+    ProductInput:
+      type: object
+      additionalProperties: false
+      required: [name, priceMinor]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        priceMinor: { type: integer, minimum: 1, maximum: 100000000 }
+        category: { type: string, maxLength: 60 }
+        imageUrl: { type: string, nullable: true, pattern: '^https://' }
+        active: { type: boolean }
+        initialStock: { type: integer, minimum: 0, maximum: 1000000, description: create only }
+        testBehavior: { type: string, nullable: true, enum: [PAYMENT_DECLINE, PAYMENT_TRANSIENT_ONCE, null] }
+    OrderItem:
+      type: object
+      properties:
+        productId: { type: string }
+        name: { type: string }
+        unitPriceMinor: { type: integer }
+        quantity: { type: integer }
+        lineTotalMinor: { type: integer }
+    RetryDecision:
+      type: object
+      properties:
+        retryable: { type: boolean }
+        action: { type: string, nullable: true, enum: [RESTART, REPUBLISH_ORDER_PLACED, REPUBLISH_INVENTORY_RESERVED, RENOTIFY, null] }
+        reason: { type: string }
+        category: { type: string, nullable: true, enum: [BUSINESS, PAYMENT_DECLINED, TRANSIENT, PERMANENT, null] }
+    Order:
+      type: object
+      properties:
+        orderId: { type: string }
+        customerId: { type: string }
+        items: { type: array, items: { $ref: '#/components/schemas/OrderItem' } }
+        totalMinor: { type: integer }
+        currency: { type: string }
+        itemCount: { type: integer }
+        status: { type: string, enum: [PENDING, PROCESSING, CONFIRMED, FAILED, CANCELLED] }
+        inventoryStatus: { type: string, enum: [PENDING, RESERVED, OUT_OF_STOCK, COMMITTED, RELEASED] }
+        paymentStatus: { type: string, enum: [PENDING, SUCCEEDED, FAILED, SKIPPED] }
+        notificationStatus: { type: string, enum: [PENDING, SENT, SKIPPED] }
+        failureReason: { type: string }
+        failureCategory: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        retryCount: { type: integer }
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              at: { type: string, format: date-time }
+              event: { type: string }
+              detail: { type: string }
+              status: { type: string }
+        retry: { $ref: '#/components/schemas/RetryDecision' }
+    Notification:
+      type: object
+      properties:
+        notificationId: { type: string }
+        orderId: { type: string }
+        type: { type: string, enum: [OrderConfirmed, OrderFailed] }
+        orderStatus: { type: string }
+        title: { type: string }
+        message: { type: string }
+        createdAt: { type: string, format: date-time }
+        channels: { type: array, items: { type: string, enum: [IN_APP, EMAIL] } }
+        emailStatus: { type: string, enum: [NOT_CONFIGURED, PENDING, ACCEPTED_BY_SNS, FAILED] }
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a customer (password stored as a PBKDF2 hash)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password, displayName]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8, description: 'upper, lower and a number' }
+                displayName: { type: string, maxLength: 80 }
+            example: { email: ann@example.com, password: Passw0rd!, displayName: Ann }
+      responses:
+        '201': { description: Registered; sign in with POST /auth/login }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in; returns an access token (1 h) and a refresh token (1 day)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: Tokens and profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { data: { $ref: '#/components/schemas/Session' } }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange a refresh token for new tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string } } }
+      responses:
+        '200': { description: New session }
+        '401': { $ref: '#/components/responses/Error' }
+  /me:
+    get:
+      tags: [Auth]
+      security: [{ bearerJwt: [] }]
+      summary: Current user profile
+      responses:
+        '200': { description: Profile }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /products:
+    get:
+      tags: [Products]
+      summary: Active products with availability (public)
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/NextToken' }]
+      responses:
+        '200':
+          description: Page of products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Product' } }
+                      nextToken: { type: string, nullable: true }
+  /products/{productId}:
+    get:
+      tags: [Products]
+      summary: Product details and current availability (public)
+      parameters: [{ $ref: '#/components/parameters/ProductId' }]
+      responses:
+        '200': { description: Product }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /orders:
+    post:
+      tags: [Orders]
+      security: [{ bearerJwt: [] }]
+      summary: Place an order (processed asynchronously)
+      description: |
+        Send product ids and quantities only. Prices and totals are read from the Products table.
+        Re-sending the same `Idempotency-Key` with the same body returns the same order (200, `idempotentReplay: true`);
+        with a different body it returns 409 `IDEMPOTENCY_KEY_REUSED`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[A-Za-z0-9_\-]{8,128}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [productId, quantity]
+                    properties:
+                      productId: { type: string }
+                      quantity: { type: integer, minimum: 1, maximum: 99 }
+            example: { items: [{ productId: prd_seed_hub, quantity: 1 }] }
+      responses:
+        '202':
+          description: Accepted, status PENDING
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { data: { $ref: '#/components/schemas/Order' } }
+        '200': { description: Idempotent replay of an earlier request }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+    get:
+      tags: [Orders]
+      security: [{ bearerJwt: [] }]
+      summary: The caller's order history, newest first
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/NextToken' }]
+      responses:
+        '200': { description: Page of orders }
+        '401': { $ref: '#/components/responses/Error' }
+  /orders/{orderId}:
+    get:
+      tags: [Orders]
+      security: [{ bearerJwt: [] }]
+      summary: Order details and processing status (poll this)
+      description: Customers can only read their own orders (404 otherwise); admins can read any order.
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '200': { description: Order }
+        '404': { $ref: '#/components/responses/Error' }
+  /notifications:
+    get:
+      tags: [Orders]
+      security: [{ bearerJwt: [] }]
+      summary: The caller's notifications, newest first
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/NextToken' }]
+      responses:
+        '200':
+          description: Page of notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+                      nextToken: { type: string, nullable: true }
+
+  /admin/orders:
+    get:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: All orders, newest first, optional status filter
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/NextToken' }
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, PROCESSING, CONFIRMED, FAILED, CANCELLED] }
+      responses:
+        '200': { description: Page of orders with retry eligibility }
+        '403': { $ref: '#/components/responses/Error' }
+  /admin/orders/{orderId}:
+    get:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Order detail with payments and retry eligibility
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '200': { description: Order detail }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /admin/orders/{orderId}/retry:
+    post:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Retry an eligible failed or stuck order
+      description: Returns 409 `NOT_RETRYABLE` (with the decision in `details`) or `RETRY_CONFLICT` (concurrent/duplicate retry).
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '202': { description: Retry started }
+        '409': { $ref: '#/components/responses/Error' }
+  /admin/orders/{orderId}/cancel:
+    post:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Cancel a pending, processing or failed order (releases reserved stock)
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '200': { description: Cancelled }
+        '409': { $ref: '#/components/responses/Error' }
+  /admin/products:
+    get:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: All products with stock (including inactive)
+      parameters: [{ $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/NextToken' }]
+      responses:
+        '200': { description: Products }
+    post:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Create a product (and its inventory record)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { type: object, properties: { data: { $ref: '#/components/schemas/AdminProduct' } } }
+        '400': { $ref: '#/components/responses/Error' }
+  /admin/products/{productId}:
+    get:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Product with stock details
+      parameters: [{ $ref: '#/components/parameters/ProductId' }]
+      responses:
+        '200': { description: Product }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Update editable product fields
+      parameters: [{ $ref: '#/components/parameters/ProductId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductInput' }
+      responses:
+        '200': { description: Updated }
+        '404': { $ref: '#/components/responses/Error' }
+  /admin/products/{productId}/stock:
+    patch:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Set or adjust available stock (never below zero)
+      parameters: [{ $ref: '#/components/parameters/ProductId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [quantity]
+              properties:
+                mode: { type: string, enum: [set, adjust], default: set }
+                quantity: { type: integer, description: 'set: >= 0; adjust: non-zero delta' }
+                reason: { type: string, maxLength: 200 }
+            example: { mode: adjust, quantity: 10, reason: delivery }
+      responses:
+        '200': { description: Updated product }
+        '409': { description: Would make stock negative (NEGATIVE_STOCK) }
+  /admin/stats:
+    get:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Dashboard counts (orders by status, products, low stock)
+      responses:
+        '200': { description: Stats }
+  /admin/dlq-status:
+    get:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Queue/DLQ counts, alarm states, stuck and failed orders (approximate)
+      responses:
+        '200': { description: Operational status }
+  /admin/dlq/{queue}/redrive:
+    post:
+      tags: [Admin]
+      security: [{ bearerJwt: [] }]
+      summary: Move messages from a DLQ back to its source queue (SQS StartMessageMoveTask)
+      parameters:
+        - name: queue
+          in: path
+          required: true
+          schema: { type: string, enum: [stock, payment, notify] }
+      responses:
+        '202': { description: Redrive started }
+        '409': { $ref: '#/components/responses/Error' }

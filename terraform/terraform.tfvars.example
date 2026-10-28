@@ -1,0 +1,35 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is git-ignored.
+# Never put AWS access keys here – Terraform reads them from the AWS CLI
+# profile / environment (see docs/deployment.md).
+
+aws_region   = "us-east-1"
+project_name = "ordersys"
+environment  = "dev"
+
+# AWS Academy Learner Lab: keep true (the lab cannot create IAM roles).
+# Normal AWS account: set false to create least-privilege roles per Lambda.
+use_lab_role = true
+
+# Operational alerts (you will receive a confirmation email from AWS SNS).
+admin_alert_email = "" # e.g. "you@example.com"
+
+# Optional customer emails through SNS (each customer must confirm a subscription).
+enable_customer_email = false
+
+# Frontend hosting: false = S3 website (HTTP), true = CloudFront (HTTPS).
+enable_cloudfront = false
+
+# Extra origins for local development of the frontend against the deployed API.
+cors_allowed_origins = ["http://localhost:5173"]
+
+# Demo / test behaviour
+currency                = "THB"
+enable_test_scenarios   = true
+payment_simulation_mode = "deterministic"
+payment_failure_rate    = 0.0
+stuck_order_seconds     = 120
+
+# Cost / data protection
+enable_point_in_time_recovery = true
+log_retention_days            = 7
+lambda_architecture           = "x86_64"

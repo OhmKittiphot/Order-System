@@ -1,0 +1,10 @@
+[
+  {"seedId": "prd_seed_earbuds", "name": "Wireless Earbuds", "description": "Bluetooth 5.3 earbuds with active noise cancellation and 30-hour battery case.", "priceMinor": 129000, "category": "Audio", "initialStock": 25},
+  {"seedId": "prd_seed_keyboard", "name": "Mechanical Keyboard", "description": "75% hot-swappable keyboard with tactile switches and PBT keycaps.", "priceMinor": 249000, "category": "Accessories", "initialStock": 12},
+  {"seedId": "prd_seed_hub", "name": "USB-C Hub 7-in-1", "description": "HDMI 4K, 3x USB-A, SD/microSD and 100W pass-through charging.", "priceMinor": 89000, "category": "Accessories", "initialStock": 40},
+  {"seedId": "prd_seed_monitor", "name": "27\" QHD Monitor", "description": "27-inch IPS panel, 2560x1440, 75 Hz, height-adjustable stand.", "priceMinor": 699000, "category": "Displays", "initialStock": 5},
+  {"seedId": "prd_seed_stand", "name": "Aluminium Laptop Stand", "description": "Foldable stand with six height levels for 10-17 inch laptops.", "priceMinor": 79000, "category": "Accessories", "initialStock": 3},
+  {"seedId": "prd_seed_mug", "name": "Limited Edition Mug", "description": "Only one left - use it to demonstrate the out-of-stock workflow.", "priceMinor": 35000, "category": "Merch", "initialStock": 1},
+  {"seedId": "prd_test_decline", "name": "TEST - Declined Payment Item", "description": "Test scenario: the simulated payment for any order containing this item is declined and the reserved stock is released.", "priceMinor": 10000, "category": "Test scenarios", "initialStock": 100, "testBehavior": "PAYMENT_DECLINE"},
+  {"seedId": "prd_test_flaky", "name": "TEST - Flaky Payment Item", "description": "Test scenario: payment times out on the first attempt, the message lands in the payment DLQ, and an admin retry succeeds.", "priceMinor": 10000, "category": "Test scenarios", "initialStock": 100, "testBehavior": "PAYMENT_TRANSIENT_ONCE"}
+]

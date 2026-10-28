@@ -1,0 +1,5 @@
+# Runtime dependencies of the Lambda functions.
+# boto3/botocore are provided by the AWS Lambda Python 3.12 runtime, so the
+# deployment package contains only our source code (see terraform/lambda.tf).
+# Install locally only if you run scripts that talk to AWS.
+boto3>=1.34

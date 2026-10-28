@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest>=8
+pyyaml>=6        # OpenAPI consistency test
+moto[dynamodb]>=5.0   # optional: enables tests/test_boto_gateway_moto.py
+ruff>=0.6
+mypy>=1.10
