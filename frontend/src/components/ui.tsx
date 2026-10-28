@@ -258,7 +258,11 @@ export function ConfirmDialog({
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
-    if (open && !d.open) d.showModal?.();
+    // showModal() puts the dialog in the top layer (centred, with backdrop); the attribute is a fallback for jsdom.
+    if (open && !d.open) {
+      if (d.showModal) d.showModal();
+      else d.setAttribute("open", "");
+    }
     if (!open && d.open) d.close?.();
   }, [open]);
   if (!open) return null;
@@ -268,7 +272,6 @@ export function ConfirmDialog({
       className="w-[calc(100vw-2rem)] max-w-md overflow-hidden rounded-3xl border border-white/70 bg-white/95 p-0 text-slate-900 shadow-[0_30px_80px_-20px_rgb(11_13_20/0.45)] backdrop:bg-ink/45 backdrop:backdrop-blur-sm"
       onCancel={onCancel}
       aria-labelledby="dialog-title"
-      open={open}
     >
       <div className={`h-1 bg-linear-to-r ${tone === "danger" ? "from-red-500 to-ember-500" : "from-cobalt-600 to-ember-500"}`} aria-hidden="true" />
       <div className="p-6 sm:p-7">
